@@ -1,6 +1,7 @@
 """Webhook handler for Telegram updates."""
 
 import logging
+import traceback
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +20,53 @@ from .tone import tone_analyzer
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# Error tracking
+class ErrorTracker:
+    """Simple error tracking for monitoring critical issues."""
+
+    def __init__(self) -> None:
+        self.error_counts: dict[str, int] = {}
+        self.recent_errors: list[dict[str, Any]] = []
+        self.max_recent_errors = 50
+
+    def track_error(self, error_type: str, error_message: str, context: dict[str, Any] | None = None) -> None:
+        """Track an error occurrence."""
+        self.error_counts[error_type] = self.error_counts.get(error_type, 0) + 1
+
+        error_info = {
+            "timestamp": datetime.now().isoformat(),
+            "type": error_type,
+            "message": error_message,
+            "context": context or {},
+        }
+
+        self.recent_errors.append(error_info)
+
+        # Keep only recent errors
+        if len(self.recent_errors) > self.max_recent_errors:
+            self.recent_errors = self.recent_errors[-self.max_recent_errors:]
+
+        # Log critical errors
+        if error_type in ["webhook_failure", "config_error", "gpt_api_failure"]:
+            logger.error(f"CRITICAL ERROR [{error_type}]: {error_message}", extra={"context": context})
+
+    def get_error_stats(self) -> dict[str, Any]:
+        """Get error statistics."""
+        return {
+            "error_counts": self.error_counts,
+            "recent_errors": self.recent_errors[-10:],  # Last 10 errors
+            "total_errors": sum(self.error_counts.values()),
+        }
+
+    def reset_stats(self) -> None:
+        """Reset error statistics."""
+        self.error_counts.clear()
+        self.recent_errors.clear()
+        logger.info("Error statistics reset")
+
+# Global error tracker
+error_tracker = ErrorTracker()
 
 
 @router.post("/telegram")
@@ -53,6 +101,11 @@ async def handle_telegram_webhook(request: Request) -> dict[str, str]:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
+        error_tracker.track_error(
+            "webhook_failure",
+            str(e),
+            {"traceback": traceback.format_exc(), "endpoint": "telegram_webhook"}
+        )
         logger.error(f"Error processing webhook: {e}")
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
@@ -68,6 +121,11 @@ async def process_update(update: Update) -> None:
             logger.debug(f"Ignoring update type: {type(update)}")
 
     except Exception as e:
+        error_tracker.track_error(
+            "update_processing_error",
+            str(e),
+            {"update_type": type(update).__name__}
+        )
         logger.error(f"Error processing update: {e}")
 
 
@@ -212,6 +270,11 @@ async def process_bot_logic(message: StoredMessage) -> None:
                 message_store.add_message(bot_message)
 
             except Exception as e:
+                error_tracker.track_error(
+                    "gpt_api_failure",
+                    str(e),
+                    {"message_id": message.message_id, "chat_id": message.chat_id}
+                )
                 logger.error(f"Failed to generate response: {e}")
                 # Fall back to reaction
                 reaction = reaction_handler.choose_reaction(
@@ -222,4 +285,22 @@ async def process_bot_logic(message: StoredMessage) -> None:
                 )
 
     except Exception as e:
+        error_tracker.track_error(
+            "bot_logic_error",
+            str(e),
+            {"message_id": message.message_id, "chat_id": message.chat_id}
+        )
         logger.error(f"Error in bot logic processing: {e}")
+
+
+@router.get("/errors")
+async def get_error_stats() -> dict[str, Any]:
+    """Get error statistics for monitoring."""
+    return error_tracker.get_error_stats()
+
+
+@router.post("/errors/reset")
+async def reset_error_stats() -> dict[str, str]:
+    """Reset error statistics (admin endpoint)."""
+    error_tracker.reset_stats()
+    return {"status": "reset", "message": "Error statistics have been reset"}

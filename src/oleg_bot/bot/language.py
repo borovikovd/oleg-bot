@@ -2,7 +2,7 @@
 
 import logging
 
-from langdetect import LangDetectException, detect
+from langdetect import LangDetectException, detect  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 

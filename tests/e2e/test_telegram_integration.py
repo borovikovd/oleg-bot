@@ -21,9 +21,9 @@ def test_settings():
         telegram_bot_token="test_token",
         telegram_webhook_url="https://test.example.com",
         telegram_webhook_secret="test_secret",
-        openai_api_key="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",
-        openai_model="google/gemini-2.0-flash-exp:free",
-        openai_base_url="https://openrouter.ai/api/v1",
+        openai_api_key="test_api_key",
+        openai_model="gpt-4o",
+        openai_base_url="https://api.openai.com/v1",
         admin_user_ids=[12345],
         environment="test",
         debug=True,
@@ -33,7 +33,9 @@ def test_settings():
 @pytest.fixture
 def test_client(test_settings):
     """Test client with mocked settings."""
-    with patch("oleg_bot.config.settings", test_settings):
+    with patch("oleg_bot.config.settings", test_settings), \
+         patch("oleg_bot.bot.webhook.settings", test_settings), \
+         patch("oleg_bot.main.settings", test_settings):
         with TestClient(app) as client:
             yield client
 
@@ -73,7 +75,7 @@ def mock_openai_response():
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "created": 1634567890,
-        "model": "google/gemini-2.0-flash-exp:free",
+        "model": "gpt-4o",
         "choices": [
             {
                 "index": 0,
@@ -118,17 +120,16 @@ class TestTelegramWebhook:
     @pytest.mark.asyncio
     async def test_webhook_invalid_secret(self, test_client, mock_telegram_update, test_settings):
         """Test webhook rejects invalid secrets."""
-        # Mock bot initialization for this test
-        with patch.object(startup_manager, 'initialize_bot'), \
-             patch.object(startup_manager, 'bot'):
+        # Verify test settings are configured with webhook secret
+        assert test_settings.telegram_webhook_secret == "test_secret"
 
-            response = test_client.post(
-                "/webhook/telegram",
-                json=mock_telegram_update.to_dict(),
-                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong_secret"}
-            )
+        response = test_client.post(
+            "/webhook/telegram",
+            json=mock_telegram_update.to_dict(),
+            headers={"X-Telegram-Bot-Api-Secret-Token": "wrong_secret"}
+        )
 
-            assert response.status_code == 403
+        assert response.status_code == 403
 
     @pytest.mark.asyncio
     async def test_webhook_rate_limiting(self, test_client, mock_telegram_update):
@@ -215,7 +216,8 @@ class TestMessageProcessing:
                 tone_hints = ToneHints(
                     formality_level="casual",
                     has_high_emoji=False,
-                    detected_emotion="neutral"
+                    emoji_density=0.0,
+                    avg_message_length=10.0
                 )
 
                 response = await responder.generate_response(
@@ -354,7 +356,8 @@ class TestErrorHandling:
                 tone_hints = ToneHints(
                     formality_level="casual",
                     has_high_emoji=False,
-                    detected_emotion="neutral"
+                    emoji_density=0.0,
+                    avg_message_length=10.0
                 )
 
                 # Should return fallback response
@@ -386,8 +389,10 @@ class TestBotStartup:
     @pytest.mark.asyncio
     async def test_bot_initialization(self, test_settings):
         """Test bot initialization process."""
+        # Stop the auto-mock and patch settings and Bot class
         with patch("oleg_bot.config.settings", test_settings), \
-             patch("telegram.Bot") as mock_bot_class:
+             patch("oleg_bot.bot.startup.settings", test_settings), \
+             patch("oleg_bot.bot.startup.Bot") as mock_bot_class:
 
             mock_bot = AsyncMock()
             mock_bot.get_me.return_value = MagicMock(username="test_bot", first_name="Test Bot")
@@ -397,6 +402,9 @@ class TestBotStartup:
                 pending_update_count=0
             )
             mock_bot_class.return_value = mock_bot
+
+            # Reset startup manager state first
+            startup_manager.bot = None
 
             await startup_manager.initialize_bot()
 

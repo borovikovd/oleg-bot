@@ -24,8 +24,12 @@ def clean_message_store():
 
 
 @pytest.fixture(autouse=True)
-def mock_startup_manager():
+def mock_startup_manager(request):
     """Mock startup manager to prevent actual bot initialization in tests."""
-    with patch("oleg_bot.bot.startup.startup_manager.initialize_bot"):
+    # Skip auto-mock for tests that explicitly test bot initialization
+    if request.node.name == "test_bot_initialization":
         yield
+    else:
+        with patch("oleg_bot.bot.startup.startup_manager.initialize_bot"):
+            yield
 

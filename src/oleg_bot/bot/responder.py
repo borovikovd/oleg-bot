@@ -48,10 +48,9 @@ class GPTResponder:
         self.max_tokens = max_tokens
         self.temperature = temperature
 
-        # Response tracking for cost management
+        # Response tracking
         self._total_requests = 0
         self._total_tokens_used = 0
-        self._total_cost_estimate = 0.0
 
         logger.info(
             f"GPT responder initialized: model={model}, max_tokens={max_tokens}, temperature={temperature}"
@@ -273,47 +272,13 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
         return random.choice(responses)
 
     def _update_usage_stats(self, response: ChatCompletion) -> None:
-        """Update usage statistics for cost tracking."""
+        """Update usage statistics."""
         self._total_requests += 1
 
         if response.usage:
-            input_tokens = response.usage.prompt_tokens
-            output_tokens = response.usage.completion_tokens
             total_tokens = response.usage.total_tokens
             self._total_tokens_used += total_tokens
 
-            # Model-specific pricing (per 1M tokens as of 2024)
-            cost_per_million = self._get_model_pricing()
-
-            if isinstance(cost_per_million, dict):
-                # Separate input/output pricing
-                input_cost = (input_tokens / 1_000_000) * cost_per_million["input"]
-                output_cost = (output_tokens / 1_000_000) * cost_per_million["output"]
-                estimated_cost = input_cost + output_cost
-            else:
-                # Flat rate pricing
-                estimated_cost = (total_tokens / 1_000_000) * cost_per_million
-
-            self._total_cost_estimate += estimated_cost
-
-    def _get_model_pricing(self) -> dict[str, float] | float:
-        """Get pricing information for the current model."""
-        model_lower = self.model.lower()
-
-        # OpenRouter model pricing (per 1M tokens)
-        if "gemini" in model_lower and "free" in model_lower:
-            return 0.0  # Free model
-        elif "gpt-4o" in model_lower:
-            return {"input": 5.0, "output": 15.0}  # GPT-4o pricing
-        elif "gpt-4" in model_lower:
-            return {"input": 30.0, "output": 60.0}  # GPT-4 pricing
-        elif "gpt-3.5" in model_lower:
-            return {"input": 0.5, "output": 1.5}  # GPT-3.5 pricing
-        elif "claude" in model_lower:
-            return {"input": 15.0, "output": 75.0}  # Claude pricing estimate
-        else:
-            # Unknown model, use conservative estimate
-            return {"input": 10.0, "output": 30.0}
 
     def get_usage_stats(self) -> dict[str, Any]:
         """Get current usage statistics."""
@@ -321,20 +286,17 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
             "model": self.model,
             "total_requests": self._total_requests,
             "total_tokens_used": self._total_tokens_used,
-            "estimated_cost_usd": round(self._total_cost_estimate, 4),
             "avg_tokens_per_request": (
                 round(self._total_tokens_used / self._total_requests, 1)
                 if self._total_requests > 0
                 else 0.0
             ),
-            "pricing": self._get_model_pricing(),
         }
 
     def reset_usage_stats(self) -> None:
         """Reset usage statistics."""
         self._total_requests = 0
         self._total_tokens_used = 0
-        self._total_cost_estimate = 0.0
         logger.info("Usage statistics reset")
 
     @retry(

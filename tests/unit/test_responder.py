@@ -15,7 +15,11 @@ class TestGPTResponder:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.responder = GPTResponder(api_key="test_key")
+        self.responder = GPTResponder(
+            api_key="test_key",
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1"
+        )
 
     def test_initialization(self) -> None:
         """Test GPT responder initialization."""
@@ -31,12 +35,13 @@ class TestGPTResponder:
         assert responder.temperature == 0.7
         assert responder._total_requests == 0
         assert responder._total_tokens_used == 0
-        assert responder._total_cost_estimate == 0.0
 
     def test_initialization_defaults(self) -> None:
         """Test initialization with default values."""
         with patch("oleg_bot.bot.responder.settings") as mock_settings:
             mock_settings.openai_api_key = "default_key"
+            mock_settings.openai_base_url = "https://api.openai.com/v1"
+            mock_settings.openai_model = "gpt-4o"
             responder = GPTResponder()
 
             assert responder.model == "gpt-4o"
@@ -438,7 +443,6 @@ class TestGPTResponder:
 
         assert self.responder._total_requests == 1
         assert self.responder._total_tokens_used == 100
-        assert self.responder._total_cost_estimate > 0
 
         # Test second update
         self.responder._update_usage_stats(mock_response)
@@ -455,7 +459,6 @@ class TestGPTResponder:
 
         assert self.responder._total_requests == 1
         assert self.responder._total_tokens_used == 0
-        assert self.responder._total_cost_estimate == 0.0
 
     def test_get_usage_stats(self) -> None:
         """Test getting usage statistics."""
@@ -464,7 +467,6 @@ class TestGPTResponder:
 
         assert stats["total_requests"] == 0
         assert stats["total_tokens_used"] == 0
-        assert stats["estimated_cost_usd"] == 0.0
         assert stats["avg_tokens_per_request"] == 0.0
 
         # After some usage
@@ -479,7 +481,7 @@ class TestGPTResponder:
 
         assert stats["total_requests"] == 2
         assert stats["total_tokens_used"] == 300
-        assert stats["estimated_cost_usd"] > 0
+        assert stats["avg_tokens_per_request"] == 150.0
         assert stats["avg_tokens_per_request"] == 150.0
 
     def test_reset_usage_stats(self) -> None:
@@ -501,11 +503,12 @@ class TestGPTResponder:
         # Verify reset
         assert self.responder._total_requests == 0
         assert self.responder._total_tokens_used == 0
-        assert self.responder._total_cost_estimate == 0.0
 
         # Check stats API also returns zeros
         stats = self.responder.get_usage_stats()
-        assert all(value == 0 or value == 0.0 for value in stats.values())
+        assert stats["total_requests"] == 0
+        assert stats["total_tokens_used"] == 0
+        assert stats["avg_tokens_per_request"] == 0.0
 
     def test_language_specific_system_prompts(self) -> None:
         """Test language-specific instructions in system prompts."""

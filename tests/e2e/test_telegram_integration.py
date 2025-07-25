@@ -21,7 +21,7 @@ def test_settings():
         telegram_bot_token="test_token",
         telegram_webhook_url="https://test.example.com",
         telegram_webhook_secret="test_secret",
-        openai_api_key="test_api_key",
+        openai_api_key="sk-test_api_key_for_testing_only",
         openai_model="gpt-4o",
         openai_base_url="https://api.openai.com/v1",
         admin_user_ids=[12345],

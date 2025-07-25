@@ -5,6 +5,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ..config import settings
 from .store import StoredMessage
@@ -19,7 +20,8 @@ class GPTResponder:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "gpt-4o",
+        base_url: str | None = None,
+        model: str | None = None,
         max_tokens: int = 150,
         temperature: float = 0.8,
     ):
@@ -28,12 +30,16 @@ class GPTResponder:
 
         Args:
             api_key: OpenAI API key (defaults to settings)
-            model: Model to use for generation
+            base_url: OpenAI API base URL (defaults to settings)
+            model: Model to use for generation (defaults to settings)
             max_tokens: Maximum tokens in response
             temperature: Response creativity (0.0-2.0)
         """
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
-        self.model = model
+        self.client = AsyncOpenAI(
+            api_key=api_key or settings.openai_api_key,
+            base_url=base_url or settings.openai_base_url,
+        )
+        self.model = model or settings.openai_model
         self.max_tokens = max_tokens
         self.temperature = temperature
 
@@ -84,17 +90,12 @@ class GPTResponder:
                 message, conversation_context, language
             )
 
-            # Call OpenAI API
-            response = await self.client.chat.completions.create(
-                model=self.model,
+            # Call OpenAI API with retry logic
+            response = await self._call_openai_with_retry(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                presence_penalty=0.1,  # Slight penalty for repetition
-                frequency_penalty=0.1,  # Slight penalty for overused words
             )
 
             # Extract response
@@ -271,18 +272,48 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
         self._total_requests += 1
 
         if response.usage:
-            tokens_used = response.usage.total_tokens
-            self._total_tokens_used += tokens_used
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            total_tokens = response.usage.total_tokens
+            self._total_tokens_used += total_tokens
 
-            # Rough cost estimate for GPT-4o (as of 2024)
-            # Input: $5/1M tokens, Output: $15/1M tokens
-            # Using average for simplicity: $10/1M tokens
-            estimated_cost = (tokens_used / 1_000_000) * 10.0
+            # Model-specific pricing (per 1M tokens as of 2024)
+            cost_per_million = self._get_model_pricing()
+            
+            if isinstance(cost_per_million, dict):
+                # Separate input/output pricing
+                input_cost = (input_tokens / 1_000_000) * cost_per_million["input"]
+                output_cost = (output_tokens / 1_000_000) * cost_per_million["output"]
+                estimated_cost = input_cost + output_cost
+            else:
+                # Flat rate pricing
+                estimated_cost = (total_tokens / 1_000_000) * cost_per_million
+                
             self._total_cost_estimate += estimated_cost
+
+    def _get_model_pricing(self) -> dict[str, float] | float:
+        """Get pricing information for the current model."""
+        model_lower = self.model.lower()
+        
+        # OpenRouter model pricing (per 1M tokens)
+        if "gemini" in model_lower and "free" in model_lower:
+            return 0.0  # Free model
+        elif "gpt-4o" in model_lower:
+            return {"input": 5.0, "output": 15.0}  # GPT-4o pricing
+        elif "gpt-4" in model_lower:
+            return {"input": 30.0, "output": 60.0}  # GPT-4 pricing
+        elif "gpt-3.5" in model_lower:
+            return {"input": 0.5, "output": 1.5}  # GPT-3.5 pricing
+        elif "claude" in model_lower:
+            return {"input": 15.0, "output": 75.0}  # Claude pricing estimate
+        else:
+            # Unknown model, use conservative estimate
+            return {"input": 10.0, "output": 30.0}
 
     def get_usage_stats(self) -> dict[str, Any]:
         """Get current usage statistics."""
         return {
+            "model": self.model,
             "total_requests": self._total_requests,
             "total_tokens_used": self._total_tokens_used,
             "estimated_cost_usd": round(self._total_cost_estimate, 4),
@@ -291,6 +322,7 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
                 if self._total_requests > 0
                 else 0.0
             ),
+            "pricing": self._get_model_pricing(),
         }
 
     def reset_usage_stats(self) -> None:
@@ -299,6 +331,35 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
         self._total_tokens_used = 0
         self._total_cost_estimate = 0.0
         logger.info("Usage statistics reset")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((Exception,)),
+        reraise=True,
+    )
+    async def _call_openai_with_retry(self, messages: list[dict[str, str]]) -> ChatCompletion:
+        """Call OpenAI API with retry logic for transient failures."""
+        extra_headers = {}
+        extra_body = {}
+        
+        # Add OpenRouter specific headers if using OpenRouter
+        if "openrouter.ai" in settings.openai_base_url:
+            extra_headers.update({
+                "HTTP-Referer": "https://github.com/anthropics/oleg-bot",
+                "X-Title": "OlegBot",
+            })
+        
+        return await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            presence_penalty=0.1,
+            frequency_penalty=0.1,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+        )
 
 
 # Global responder instance

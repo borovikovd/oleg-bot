@@ -36,6 +36,16 @@ class Settings(BaseSettings):
         default="gpt-4o",
         description="OpenAI model to use for responses",
     )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="OpenAI API base URL (for OpenRouter or other providers)",
+    )
+
+    # Admin Configuration
+    admin_user_ids: list[int] = Field(
+        default_factory=list,
+        description="Telegram user IDs with admin privileges",
+    )
 
     # Bot Behavior Settings
     window_size: int = Field(
@@ -170,7 +180,10 @@ def get_settings() -> Settings:
         return Settings(
             telegram_bot_token="test_token",
             telegram_webhook_url="http://localhost:8000/webhook/telegram",
-            openai_api_key="test_key",
+            openai_api_key="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",
+            openai_model="google/gemini-2.0-flash-exp:free",
+            openai_base_url="https://openrouter.ai/api/v1",
+            admin_user_ids=[],
         )
 
 

@@ -5,6 +5,7 @@ import logging
 from .decision import decision_engine
 from .reactions import reaction_handler
 from .store import message_store
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -247,5 +248,5 @@ class CommandHandler:
         return all_commands
 
 
-# Global command handler instance
-command_handler = CommandHandler()
+# Global command handler instance with admin users from config
+command_handler = CommandHandler(admin_user_ids=settings.admin_user_ids)

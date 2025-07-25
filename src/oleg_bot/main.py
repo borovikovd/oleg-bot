@@ -6,8 +6,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
+from .bot.startup import startup_manager
 from .bot.webhook import router as webhook_router
 from .config import settings
 
@@ -22,6 +26,23 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Create rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP for rate limiting, considering proxies."""
+    # Check for forwarded headers (for proxy setups)
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+    
+    # Fallback to remote address
+    return get_remote_address(request)
 
 
 def validate_startup_config() -> None:
@@ -73,12 +94,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Startup
     logger.info("OlegBot starting up...")
     validate_startup_config()
+    
+    # Initialize bot and register webhook
+    try:
+        await startup_manager.initialize_bot()
+        logger.info("Bot initialization complete")
+    except Exception as e:
+        logger.error(f"Failed to initialize bot: {e}")
+        if settings.is_production():
+            raise  # Fail fast in production
+        else:
+            logger.warning("Continuing without bot initialization (development mode)")
+    
     logger.info("OlegBot startup complete")
 
     yield
 
     # Shutdown
     logger.info("OlegBot shutting down...")
+    try:
+        await startup_manager.shutdown()
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+    logger.info("OlegBot shutdown complete")
 
 
 # Create FastAPI app
@@ -89,6 +127,10 @@ app = FastAPI(
     lifespan=lifespan,
     debug=settings.debug,
 )
+
+# Add rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Include routers
 app.include_router(webhook_router)
@@ -109,6 +151,12 @@ async def root() -> dict[str, Any]:
 async def health_check() -> dict[str, str]:
     """Health check endpoint for monitoring."""
     return {"status": "healthy", "service": "oleg-bot"}
+
+
+@app.get("/bot/status")
+async def bot_status() -> dict[str, Any]:
+    """Get detailed bot status information."""
+    return await startup_manager.get_bot_status()
 
 
 if __name__ == "__main__":

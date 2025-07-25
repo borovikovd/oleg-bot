@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from telegram import Update
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from telegram import Bot, Update, error
 
 from ..config import settings
 from .commands import command_handler
@@ -19,7 +21,13 @@ from .tone import tone_analyzer
 
 logger = logging.getLogger(__name__)
 
+# Import startup manager for bot instance access
+from .startup import startup_manager
+
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# Create rate limiter for webhook endpoints
+limiter = Limiter(key_func=get_remote_address)
 
 # Error tracking
 class ErrorTracker:
@@ -68,8 +76,92 @@ class ErrorTracker:
 # Global error tracker
 error_tracker = ErrorTracker()
 
+def get_bot() -> Bot:
+    """Get the shared bot instance from startup manager."""
+    if not startup_manager.bot:
+        raise RuntimeError("Bot not initialized - startup may have failed")
+    return startup_manager.bot
+
+
+async def send_message(
+    chat_id: int, 
+    text: str, 
+    reply_to_message_id: int | None = None,
+    parse_mode: str | None = "Markdown"
+) -> None:
+    """Send a message via Telegram API with error handling."""
+    try:
+        bot = get_bot()
+        sent_message = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_to_message_id=reply_to_message_id,
+            parse_mode=parse_mode
+        )
+        
+        # Store bot's message in the message store
+        bot_message = StoredMessage(
+            message_id=sent_message.message_id,
+            chat_id=chat_id,
+            user_id=0,  # Bot user ID
+            text=text,
+            timestamp=datetime.now(),
+            is_bot_message=True,
+            reply_to_message_id=reply_to_message_id,
+        )
+        message_store.add_message(bot_message)
+        
+        logger.info(f"Sent message to chat {chat_id}: {text[:50]}...")
+        
+    except error.TelegramError as e:
+        error_tracker.track_error(
+            "telegram_api_error",
+            f"Failed to send message: {e}",
+            {"chat_id": chat_id, "error_code": getattr(e, 'message', None)}
+        )
+        logger.error(f"Failed to send message to chat {chat_id}: {e}")
+        raise
+    except Exception as e:
+        error_tracker.track_error(
+            "message_send_error",
+            str(e),
+            {"chat_id": chat_id}
+        )
+        logger.error(f"Unexpected error sending message: {e}")
+        raise
+
+
+async def send_reaction(chat_id: int, message_id: int, reaction: str) -> None:
+    """Send a reaction via Telegram API with error handling."""
+    try:
+        bot = get_bot()
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[{"type": "emoji", "emoji": reaction}]
+        )
+        
+        logger.info(f"Sent reaction {reaction} to message {message_id} in chat {chat_id}")
+        
+    except error.TelegramError as e:
+        # Reactions might not be supported in all chats, so log as warning instead of error
+        logger.warning(f"Failed to send reaction to chat {chat_id}: {e}")
+        error_tracker.track_error(
+            "telegram_reaction_error",
+            f"Failed to send reaction: {e}",
+            {"chat_id": chat_id, "message_id": message_id, "reaction": reaction}
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error sending reaction: {e}")
+        error_tracker.track_error(
+            "reaction_send_error",
+            str(e),
+            {"chat_id": chat_id, "message_id": message_id}
+        )
+
 
 @router.post("/telegram")
+@limiter.limit("100/minute")  # Limit to 100 webhook calls per minute per IP
 async def handle_telegram_webhook(request: Request) -> dict[str, str]:
     """Handle incoming Telegram webhook updates."""
     try:
@@ -191,19 +283,8 @@ async def process_bot_logic(message: StoredMessage) -> None:
                 message.text, message.user_id, message.chat_id
             )
 
-            # Send command response (in a real implementation, this would use the Telegram API)
-            logger.info(f"Command response: {response}")
-
-            # Store bot's command response
-            bot_message = StoredMessage(
-                message_id=message.message_id + 10000,  # Fake message ID
-                chat_id=message.chat_id,
-                user_id=0,  # Bot user ID
-                text=response,
-                timestamp=datetime.now(),
-                is_bot_message=True,
-            )
-            message_store.add_message(bot_message)
+            # Send command response via Telegram API
+            await send_message(message.chat_id, response, reply_to_message_id=message.message_id)
             return
 
         # Use decision engine to determine response
@@ -237,10 +318,8 @@ async def process_bot_logic(message: StoredMessage) -> None:
                     message.text, tone_hints, detected_language, "neutral"
                 )
 
-            # In a real implementation, this would use the Telegram API to add reaction
-            logger.info(
-                f"Bot reaction to message {message.message_id}: {reaction}"
-            )
+            # Send reaction via Telegram API
+            await send_reaction(message.chat_id, message.message_id, reaction)
 
         elif decision.action == ResponseAction.REPLY:
             # Generate and send text response
@@ -253,21 +332,8 @@ async def process_bot_logic(message: StoredMessage) -> None:
                     chat_context="group chat",
                 )
 
-                # In a real implementation, this would use the Telegram API to send message
-                logger.info(
-                    f"Bot reply to message {message.message_id}: {response_text}"
-                )
-
-                # Store bot's response
-                bot_message = StoredMessage(
-                    message_id=message.message_id + 10000,  # Fake message ID
-                    chat_id=message.chat_id,
-                    user_id=0,  # Bot user ID
-                    text=response_text,
-                    timestamp=datetime.now(),
-                    is_bot_message=True,
-                )
-                message_store.add_message(bot_message)
+                # Send reply via Telegram API
+                await send_message(message.chat_id, response_text, reply_to_message_id=message.message_id)
 
             except Exception as e:
                 error_tracker.track_error(
@@ -280,9 +346,7 @@ async def process_bot_logic(message: StoredMessage) -> None:
                 reaction = reaction_handler.choose_reaction(
                     message.text, tone_hints, detected_language, "neutral"
                 )
-                logger.info(
-                    f"Bot fallback reaction to message {message.message_id}: {reaction}"
-                )
+                await send_reaction(message.chat_id, message.message_id, reaction)
 
     except Exception as e:
         error_tracker.track_error(
@@ -294,13 +358,29 @@ async def process_bot_logic(message: StoredMessage) -> None:
 
 
 @router.get("/errors")
-async def get_error_stats() -> dict[str, Any]:
+@limiter.limit("30/minute")  # Limit error stats access
+async def get_error_stats(request: Request) -> dict[str, Any]:
     """Get error statistics for monitoring."""
     return error_tracker.get_error_stats()
 
 
 @router.post("/errors/reset")
-async def reset_error_stats() -> dict[str, str]:
+@limiter.limit("10/hour")  # Strict limit for reset operations
+async def reset_error_stats(request: Request) -> dict[str, str]:
     """Reset error statistics (admin endpoint)."""
     error_tracker.reset_stats()
     return {"status": "reset", "message": "Error statistics have been reset"}
+
+
+@router.get("/memory")
+@limiter.limit("60/minute")  # Allow frequent memory monitoring
+async def get_memory_stats(request: Request) -> dict[str, Any]:
+    """Get memory usage statistics."""
+    return message_store.get_memory_stats()
+
+
+@router.post("/memory/cleanup")
+@limiter.limit("5/hour")  # Limited cleanup operations
+async def force_memory_cleanup(request: Request) -> dict[str, Any]:
+    """Force cleanup of inactive chats."""
+    return message_store.force_cleanup()

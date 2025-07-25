@@ -2,7 +2,7 @@
 
 import os
 
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -104,7 +104,8 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
     }
 
-    @validator("telegram_webhook_url")
+    @field_validator("telegram_webhook_url")
+    @classmethod
     def validate_webhook_url(cls, v: str) -> str:
         """Validate webhook URL is HTTPS in production."""
         if v and not v.startswith("https://"):
@@ -112,7 +113,8 @@ class Settings(BaseSettings):
                 raise ValueError("Webhook URL must use HTTPS in production")
         return v
 
-    @validator("telegram_bot_token")
+    @field_validator("telegram_bot_token")
+    @classmethod
     def validate_bot_token(cls, v: str) -> str:
         """Validate bot token format."""
         # Skip validation for test environments
@@ -122,7 +124,8 @@ class Settings(BaseSettings):
             raise ValueError("Invalid bot token format")
         return v
 
-    @validator("openai_api_key")
+    @field_validator("openai_api_key")
+    @classmethod
     def validate_openai_key(cls, v: str) -> str:
         """Validate OpenAI API key format."""
         # Skip validation for test environments
@@ -132,7 +135,8 @@ class Settings(BaseSettings):
             raise ValueError("OpenAI API key must start with 'sk-'")
         return v
 
-    @validator("log_level")
+    @field_validator("log_level")
+    @classmethod
     def validate_log_level(cls, v: str) -> str:
         """Validate log level."""
         valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}

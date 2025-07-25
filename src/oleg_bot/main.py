@@ -36,11 +36,11 @@ def get_client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
-    
+
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
         return real_ip
-    
+
     # Fallback to remote address
     return get_remote_address(request)
 
@@ -94,7 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Startup
     logger.info("OlegBot starting up...")
     validate_startup_config()
-    
+
     # Initialize bot and register webhook
     try:
         await startup_manager.initialize_bot()
@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             raise  # Fail fast in production
         else:
             logger.warning("Continuing without bot initialization (development mode)")
-    
+
     logger.info("OlegBot startup complete")
 
     yield
@@ -130,7 +130,7 @@ app = FastAPI(
 
 # Add rate limiting
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 # Include routers
 app.include_router(webhook_router)

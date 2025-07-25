@@ -2,10 +2,10 @@
 
 import logging
 
+from ..config import settings
 from .decision import decision_engine
 from .reactions import reaction_handler
 from .store import message_store
-from ..config import settings
 
 logger = logging.getLogger(__name__)
 

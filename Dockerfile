@@ -1,5 +1,5 @@
 # Production Dockerfile for OlegBot
-FROM python:3.13-slim
+FROM python:3.13.5-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -22,15 +22,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv
 RUN pip install uv
 
-# Copy dependency files
-COPY --chown=app:app pyproject.toml uv.lock ./
+# Copy dependency files and README (needed for package build)
+COPY --chown=app:app pyproject.toml uv.lock README.md ./
 
 # Install Python dependencies
 RUN uv sync --frozen --no-dev
 
 # Copy application code
 COPY --chown=app:app src/ ./src/
-COPY --chown=app:app README.md DESIGN.md ./
 
 # Switch to app user
 USER app

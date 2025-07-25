@@ -1,8 +1,9 @@
 """Pytest configuration for E2E tests."""
 
-import pytest
 import asyncio
 from unittest.mock import patch
+
+import pytest
 
 from oleg_bot.bot.store import message_store
 
@@ -27,3 +28,4 @@ def mock_startup_manager():
     """Mock startup manager to prevent actual bot initialization in tests."""
     with patch("oleg_bot.bot.startup.startup_manager.initialize_bot"):
         yield
+

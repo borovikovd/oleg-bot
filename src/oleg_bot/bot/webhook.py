@@ -16,13 +16,11 @@ from .decision import ResponseAction, decision_engine
 from .language import language_detector
 from .reactions import reaction_handler
 from .responder import gpt_responder
+from .startup import startup_manager
 from .store import StoredMessage, message_store
 from .tone import tone_analyzer
 
 logger = logging.getLogger(__name__)
-
-# Import startup manager for bot instance access
-from .startup import startup_manager
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
@@ -84,8 +82,8 @@ def get_bot() -> Bot:
 
 
 async def send_message(
-    chat_id: int, 
-    text: str, 
+    chat_id: int,
+    text: str,
     reply_to_message_id: int | None = None,
     parse_mode: str | None = "Markdown"
 ) -> None:
@@ -98,7 +96,7 @@ async def send_message(
             reply_to_message_id=reply_to_message_id,
             parse_mode=parse_mode
         )
-        
+
         # Store bot's message in the message store
         bot_message = StoredMessage(
             message_id=sent_message.message_id,
@@ -110,9 +108,9 @@ async def send_message(
             reply_to_message_id=reply_to_message_id,
         )
         message_store.add_message(bot_message)
-        
+
         logger.info(f"Sent message to chat {chat_id}: {text[:50]}...")
-        
+
     except error.TelegramError as e:
         error_tracker.track_error(
             "telegram_api_error",
@@ -138,11 +136,11 @@ async def send_reaction(chat_id: int, message_id: int, reaction: str) -> None:
         await bot.set_message_reaction(
             chat_id=chat_id,
             message_id=message_id,
-            reaction=[{"type": "emoji", "emoji": reaction}]
+            reaction=[reaction]
         )
-        
+
         logger.info(f"Sent reaction {reaction} to message {message_id} in chat {chat_id}")
-        
+
     except error.TelegramError as e:
         # Reactions might not be supported in all chats, so log as warning instead of error
         logger.warning(f"Failed to send reaction to chat {chat_id}: {e}")

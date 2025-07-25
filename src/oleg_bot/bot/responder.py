@@ -5,7 +5,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from ..config import settings
 from .store import StoredMessage
@@ -279,7 +284,7 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
 
             # Model-specific pricing (per 1M tokens as of 2024)
             cost_per_million = self._get_model_pricing()
-            
+
             if isinstance(cost_per_million, dict):
                 # Separate input/output pricing
                 input_cost = (input_tokens / 1_000_000) * cost_per_million["input"]
@@ -288,13 +293,13 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
             else:
                 # Flat rate pricing
                 estimated_cost = (total_tokens / 1_000_000) * cost_per_million
-                
+
             self._total_cost_estimate += estimated_cost
 
     def _get_model_pricing(self) -> dict[str, float] | float:
         """Get pricing information for the current model."""
         model_lower = self.model.lower()
-        
+
         # OpenRouter model pricing (per 1M tokens)
         if "gemini" in model_lower and "free" in model_lower:
             return 0.0  # Free model
@@ -338,21 +343,21 @@ Generate a natural, witty response that fits the conversation flow. Keep it brie
         retry=retry_if_exception_type((Exception,)),
         reraise=True,
     )
-    async def _call_openai_with_retry(self, messages: list[dict[str, str]]) -> ChatCompletion:
+    async def _call_openai_with_retry(self, messages: list[dict[str, Any]]) -> ChatCompletion:
         """Call OpenAI API with retry logic for transient failures."""
-        extra_headers = {}
-        extra_body = {}
-        
+        extra_headers: dict[str, str] = {}
+        extra_body: dict[str, str] = {}
+
         # Add OpenRouter specific headers if using OpenRouter
         if "openrouter.ai" in settings.openai_base_url:
             extra_headers.update({
                 "HTTP-Referer": "https://github.com/anthropics/oleg-bot",
                 "X-Title": "OlegBot",
             })
-        
+
         return await self.client.chat.completions.create(
             model=self.model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             presence_penalty=0.1,
